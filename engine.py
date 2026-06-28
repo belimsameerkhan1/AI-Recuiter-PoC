@@ -6,45 +6,70 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
-
+# Initialize the model once
 model = SentenceTransformer('BAAI/bge-small-en-v1.5', device='cpu')
 
 def load_data(file_path):
-    """Loads the candidates instantly using Parquet if available."""
+    """Loads candidates from Parquet, JSONL, JSON, or CSV robustly."""
     
     # 1. THE SPEED HACK: If the fast parquet file exists, load it in 1 second
     parquet_path = "data/candidates.parquet"
-    if os.path.exists(parquet_path) and "sample" not in file_path:
+    # Ensure it doesn't load cache if we are testing a temporary Streamlit upload
+    if os.path.exists(parquet_path) and "sample" not in file_path and "temp_" not in file_path:
         print("Loading instant Parquet data...")
         return pd.read_parquet(parquet_path)
         
-    # 2. THE FALLBACK: For the small sandbox sample JSON on GitHub
-    print("Loading JSON data...")
-    if file_path.endswith('.jsonl'):
-        df = pd.read_json(file_path, lines=True)
-    else:
-        df = pd.read_json(file_path)
-        
-    # Flatten the data (only needed if falling back to JSON)
-    df['years_of_experience'] = df['profile'].apply(lambda x: x.get('years_of_experience', 0) if isinstance(x, dict) else 0)
+    print(f"Loading data from {file_path}...")
     
-    if 'signals' in df.columns:
+    # 2. BULLETPROOF LOADING: Automatically handles JSON, JSON Lines, and CSV formats
+    if file_path.endswith('.csv'):
+        df = pd.read_csv(file_path)
+    else:
+        try:
+            # Try standard JSON first
+            df = pd.read_json(file_path)
+        except ValueError:
+            try:
+                # If it hits a ValueError, force JSON Lines format (JSONL)
+                df = pd.read_json(file_path, lines=True)
+            except Exception as e:
+                raise ValueError(f"🚨 CRITICAL ERROR: Could not read {file_path}. Is it valid data? Error: {e}")
+        
+    # 3. BULLETPROOF EXTRACTION: Safely handle missing 'profile' columns
+    if 'profile' in df.columns:
+        df['years_of_experience'] = df['profile'].apply(lambda x: x.get('years_of_experience', 0) if isinstance(x, dict) else 0)
+        df['summary'] = df['profile'].apply(lambda x: x.get('summary', '') if isinstance(x, dict) else '')
+        df['headline'] = df['profile'].apply(lambda x: x.get('headline', '') if isinstance(x, dict) else '')
+    else:
+        df['years_of_experience'] = 0
+        df['summary'] = ""
+        df['headline'] = ""
+
+    # Safely handle signals columns
+    if 'redrob_signals' in df.columns:
+        df['response_rate'] = df['redrob_signals'].apply(lambda x: x.get('recruiter_response_rate', 1.0) if isinstance(x, dict) else 1.0)
+        df['interview_rate'] = df['redrob_signals'].apply(lambda x: x.get('interview_completion_rate', 1.0) if isinstance(x, dict) else 1.0)
+    elif 'signals' in df.columns:
         df['response_rate'] = df['signals'].apply(lambda x: x.get('recruiter_response_rate', 1.0) if isinstance(x, dict) else 1.0)
         df['interview_rate'] = df['signals'].apply(lambda x: x.get('interview_completion_rate', 1.0) if isinstance(x, dict) else 1.0)
     else:
         df['response_rate'] = 1.0
         df['interview_rate'] = 1.0
         
-    df['skills_flat'] = df['skills'].apply(lambda s: " ".join([x.get('name', '') for x in s]) if isinstance(s, list) else "")
-    df['summary'] = df['profile'].apply(lambda x: x.get('summary', '') if isinstance(x, dict) else '')
-    df['headline'] = df['profile'].apply(lambda x: x.get('headline', '') if isinstance(x, dict) else '')
+    # Safely handle missing 'skills' columns
+    if 'skills' in df.columns:
+        df['skills_flat'] = df['skills'].apply(lambda s: " ".join([x.get('name', '') for x in s]) if isinstance(s, list) else "")
+    else:
+        df['skills_flat'] = ""
+
+    # Build Context string safely
     df['Context'] = df['headline'] + ". " + df['summary'] + ". Skills: " + df['skills_flat']
     
     return df
 
 def generate_offline_reasoning(row):
     """Generates a dynamic explanation for why the AI picked them."""
-    return f"Ranked for {row.get('years_of_experience', 0)} years of experience. Strong semantic alignment (AI Score: {row['Semantic_Score']:.2f})."
+    return f"Ranked for {row.get('years_of_experience', 0)} years of experience. Strong semantic alignment (AI Score: {row.get('Semantic_Score', 0):.2f})."
 
 def rank_candidates(df, job_description, required_experience):
     print("AI is embedding the job description...")
@@ -101,19 +126,34 @@ def rank_candidates(df, job_description, required_experience):
             
         return score
 
+    # Calculate final scores
     df['Final_Score'] = df.apply(calculate_final_score, axis=1)
 
-    ranked_df = df.sort_values(by='Final_Score', ascending=False).head(100)
+    # Initialize ranked_df BEFORE sorting
+    ranked_df = df.copy()
+
+    # Sort by 'Final_Score' (descending) and break ties with 'candidate_id' (ascending)
+    ranked_df = ranked_df.sort_values(by=['Final_Score', 'candidate_id'], ascending=[False, True]).head(100)
+    
+    # Generate the reasoning column
     ranked_df['Reasoning'] = ranked_df.apply(generate_offline_reasoning, axis=1)
 
     return ranked_df
 
-def export_submission(ranked_df, output_filename="submission.csv"):
+def export_submission(ranked_df, output_filename="final_submission.csv"):
     """Exports the final CSV perfectly matched to the Hackathon validator schema."""
     submission_df = ranked_df.copy()
+    
+    # Assign ranks 1 to 100
     submission_df['rank'] = range(1, len(submission_df) + 1)
+    
+    # Rename columns to match Hackathon spec
     submission_df = submission_df.rename(columns={'Final_Score': 'score', 'Reasoning': 'reasoning'})
+    
+    # Select only the required columns in the exact order specified
     final_cols = ['candidate_id', 'rank', 'score', 'reasoning']
     submission_df = submission_df[final_cols]
+    
+    # Export to CSV
     submission_df.to_csv(output_filename, index=False)
     print(f"✅ Successfully exported candidates to {output_filename}")
