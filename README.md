@@ -13,7 +13,7 @@ calculates semantic alignment using the `BAAI/bge-small-en-v1.5` model, applies 
 
 The system processes candidate profiles through a bulletproof, fault-tolerant pipeline that handles missing data gracefully, culminating in a dynamic visual dashboard:
 
-```mermaid
+
 
 flowchart TD
     A[Judge's Sandbox / .jsonl Upload] --> B[engine.py: Robust Data Loader]
