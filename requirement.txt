@@ -1,0 +1,16 @@
+streamlit
+pandas
+numpy
+sentence-transformers
+scikit-learn
+pyarrow
+fastparquet
+
+#🛠️ Why you need each of these:
+#streamlit: Builds your interactive web application UI.
+#pandas: Handles the heavy lifting of reading your datasets and organizing the ranking tables.
+#numpy: Powers the lightning-fast .npy memory cache that bypasses the 10-minute AI calculation.
+#sentence-transformers: The core AI library that downloads and runs the BAAI/bge-small-en-v1.5 semantic model.
+#scikit-learn: Provides the complex cosine_similarity math function that actually scores the candidates against the job description.
+#pyarrow & fastparquet: The enterprise speed-engines that allow Pandas to read your converted .parquet file in milliseconds instead of minutes.
+#Once you save this file and push it to your GitHub repository, Streamlit Cloud will handle the rest of the installation automatically!
